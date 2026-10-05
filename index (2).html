@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisioMate AI</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js" defer></script>
+<style>
+:root{--bg:#0b1220;--card:#131c30;--text:#f4f7fc;--muted:#b7c2d9;--accent:#ffd166;--line:#2a3856;--bad:#ff6b6b}
+@media (prefers-color-scheme:light){:root{--bg:#f6f8fc;--card:#fff;--text:#0b1220;--muted:#46536f;--accent:#8a5a00;--line:#d5dcec;--bad:#b00020}}
+*{box-sizing:border-box}
+body{margin:0;font:18px/1.5 system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}
+header,main{max-width:960px;margin:auto;padding:16px}
+h1{margin:.2em 0;font-size:clamp(1.8rem,5vw,2.6rem)}
+.sub{color:var(--muted);margin:0}
+.mic{width:100%;padding:28px;font-size:1.6rem;font-weight:800;border:0;border-radius:18px;background:var(--accent);color:#000;cursor:pointer}
+.mic.on{background:var(--bad);color:#fff}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+.row>*{flex:1 1 140px}
+button,input,select{font:inherit;padding:12px;border-radius:10px;border:2px solid var(--line);background:var(--card);color:var(--text)}
+button{cursor:pointer;font-weight:700}
+button:hover,button:focus-visible,.mic:focus-visible{outline:3px solid var(--accent)}
+.sos{background:var(--bad);color:#fff;border-color:var(--bad)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:14px 0}
+h2{font-size:1.15rem;margin:.1em 0 .4em}
+video{width:100%;max-height:300px;border-radius:12px;background:#000}
+#log{max-height:260px;overflow:auto}
+#log div{padding:6px 0;border-bottom:1px solid var(--line)}
+#log .bot{color:var(--accent)}
+.tiny{font-size:.85rem;color:var(--muted)}
+ul{padding-left:20px}
+</style>
+</head>
+<body>
+<header>
+  <h1>👁️ VisioMate AI</h1>
+  <p class="sub">Voice assistant for the visually impaired. Press the big button (or the <b>M</b> key) and speak.</p>
+</header>
+<main>
+  <button class="mic" id="mic" aria-label="Press and speak a command">🎙️ Tap and speak</button>
+  <div class="row">
+    <select id="lang" aria-label="Language">
+      <option value="en-IN">English (India)</option>
+      <option value="ta-IN">தமிழ் (Tamil)</option>
+      <option value="hi-IN">हिन्दी (Hindi)</option>
+    </select>
+    <input id="typed" placeholder="Or type a command and press Enter" aria-label="Type a command">
+  </div>
+
+  <div class="card" aria-live="polite">
+    <h2>Conversation</h2>
+    <div id="log"></div>
+  </div>
+
+  <div class="card">
+    <h2>Quick actions</h2>
+    <div class="row">
+      <button data-cmd="what is in front of me">📦 What's in front</button>
+      <button data-cmd="read this text">📖 Read text</button>
+      <button data-cmd="what note is this">💵 Currency</button>
+      <button data-cmd="what time is it">🕒 Time</button>
+      <button data-cmd="next step">➡️ Next step</button>
+      <button data-cmd="help">❓ Help</button>
+    </div>
+    <video id="cam" playsinline muted aria-label="Camera preview"></video>
+    <p class="tiny">Camera starts the first time you use detection or text reading. Text language:
+      <select id="ocrlang"><option value="eng">English</option><option value="eng+tam">English + Tamil</option></select></p>
+  </div>
+
+  <div class="card">
+    <h2>🧭 Navigation</h2>
+    <div class="row"><input id="dest" placeholder="Destination, e.g. Gandhipuram bus stand" aria-label="Destination">
+    <button id="go">Start</button></div>
+    <p class="tiny">Or say: "navigate to &lt;place&gt;", then "next step".</p>
+  </div>
+
+  <div class="card">
+    <h2>💊 Medicine reminders</h2>
+    <div class="row"><input id="rl" placeholder="Medicine, e.g. BP tablet" aria-label="Medicine name">
+    <input id="rt" type="time" aria-label="Time"><button id="radd">Add</button></div>
+    <ul id="rlist"></ul>
+    <p class="tiny">Or say: "remind me to take tablet at 8:30 pm". Keep this page open for alerts to sound.</p>
+  </div>
+
+  <div class="card">
+    <h2>🆘 Emergency SOS</h2>
+    <div class="row"><input id="contacts" placeholder="Contact numbers, comma separated (+91...)" aria-label="Emergency contacts"></div>
+    <div class="row"><button class="sos" id="sos">🆘 SEND SOS</button><button id="cancel">Cancel</button></div>
+    <p class="tiny">You get 5 seconds to cancel. Your phone's message app opens with your location ready to send. A web page cannot send SMS silently.</p>
+  </div>
+
+  <p class="tiny">⚠️ Assistive aid only, not a replacement for a white cane or a guide. Voice needs Chrome or Edge. Source: <a style="color:var(--accent)" href="https://github.com/merudula/visiomate-ai">GitHub</a></p>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const store = (k, v) => v === undefined ? JSON.parse(localStorage.getItem(k) || 'null') : localStorage.setItem(k, JSON.stringify(v));
+
+function log(who, t) {
+  const d = document.createElement('div'); d.className = who;
+  d.textContent = (who === 'bot' ? '🤖 ' : '🗣️ ') + t; $('#log').prepend(d);
+}
+function speak(t) {
+  log('bot', t);
+  if (!('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(t); u.lang = $('#lang').value; speechSynthesis.speak(u);
+}
+
+/* ---------- intents (English + Tamil/Tanglish) ---------- */
+const INTENTS = [
+  ['sos', ['sos', 'emergency', 'help me', 'save me', 'kaapathunga', 'kapathunga', 'udhavi', 'உதவி', 'காப்பாத்து']],
+  ['list_rem', ['my reminders', 'list reminders', 'what reminders']],
+  ['add_rem', ['remind', 'medicine', 'tablet', 'pill', 'maathirai', 'mathirai', 'மருந்து', 'மாத்திரை']],
+  ['currency', ['currency', 'note', 'money', 'rupee', 'cash', 'panam', 'பணம்', 'ரூபாய்']],
+  ['ocr', ['read', 'text', 'padi', 'படி', 'எழுத்து']],
+  ['nav', ['navigate', 'take me to', 'directions', 'route', 'way to', 'vazhi', 'வழி']],
+  ['detect', ['in front', 'around me', 'detect', 'object', 'what is this', 'munnadi', 'முன்னாடி']],
+  ['time', ['what time', "what's the time", 'time enna', 'நேரம்']],
+  ['next', ['next step', 'next direction', 'adutha', 'அடுத்து']],
+  ['help', ['help', 'what can you do', 'features']],
+];
+const route = t => { t = t.toLowerCase().trim(); for (const [n, w] of INTENTS) if (w.some(k => t.includes(k))) return n; return 'unknown'; };
+
+async function handle(text) {
+  if (!text) return;
+  log('user', text);
+  const i = route(text);
+  try {
+    if (i === 'sos') return sos();
+    if (i === 'detect') return detect();
+    if (i === 'ocr') return readText();
+    if (i === 'currency') return speak('Currency recognition needs a trained model, which is not added to the web version yet.');
+    if (i === 'time') return speak('It is ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    if (i === 'nav') {
+      const d = text.replace(/navigate to|navigate|take me to|directions to|route to|way to|please/gi, '').trim();
+      return startNav(d || $('#dest').value);
+    }
+    if (i === 'next') return speak(nextStep());
+    if (i === 'add_rem') return addReminderFromText(text);
+    if (i === 'list_rem') { const r = store('rem') || []; return speak(r.length ? r.map(x => x.label + ' at ' + x.at).join('; ') : 'You have no reminders.'); }
+    if (i === 'help') return speak('I can describe what is in front of you, read text, guide you to a place, set medicine reminders, and send an emergency alert.');
+    speak('Sorry, I did not understand. Say help to hear what I can do.');
+  } catch (e) { speak('Something went wrong: ' + e.message); }
+}
+
+/* ---------- voice input ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec, listening = false;
+function listen() {
+  if (!SR) return speak('Voice input is not supported in this browser. Please use Chrome or Edge, or type a command.');
+  if (listening) { rec.stop(); return; }
+  rec = new SR(); rec.lang = $('#lang').value; rec.interimResults = false;
+  rec.onstart = () => { listening = true; $('#mic').classList.add('on'); $('#mic').textContent = '🔴 Listening...'; };
+  rec.onend = () => { listening = false; $('#mic').classList.remove('on'); $('#mic').textContent = '🎙️ Tap and speak'; };
+  rec.onresult = e => handle(e.results[0][0].transcript);
+  rec.onerror = e => speak('I could not hear you. ' + (e.error === 'not-allowed' ? 'Please allow the microphone.' : 'Please try again.'));
+  speechSynthesis.cancel(); rec.start();
+}
+$('#mic').onclick = listen;
+document.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'm' && !/INPUT|SELECT/.test(document.activeElement.tagName)) listen(); });
+$('#typed').addEventListener('keydown', e => { if (e.key === 'Enter') { handle(e.target.value); e.target.value = ''; } });
+document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => handle(b.dataset.cmd));
+
+/* ---------- camera, detection, OCR ---------- */
+let stream, model;
+async function frame() {
+  const v = $('#cam');
+  if (!stream) {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    v.srcObject = stream; await v.play(); await new Promise(r => setTimeout(r, 700));
+  }
+  const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0); return c;
+}
+async function detect() {
+  const c = await frame();
+  if (!model) { speak('Loading the object detector. Please wait.'); model = await cocoSsd.load(); }
+  const preds = (await model.detect(c)).filter(p => p.score > 0.5);
+  if (!preds.length) return speak('I cannot see any clear objects.');
+  const items = preds.map(p => {
+    const [x, , w, h] = p.bbox, cx = (x + w / 2) / c.width, area = w * h / (c.width * c.height);
+    return { area, s: `${p.class} ${cx < .33 ? 'on your left' : cx > .66 ? 'on your right' : 'in front of you'}, ${area > .35 ? 'very close' : area > .1 ? 'nearby' : 'far away'}` };
+  }).sort((a, b) => b.area - a.area);
+  const top = [...new Set(items.map(i => i.s))].slice(0, 5);
+  speak((top.some(s => s.includes('very close')) ? 'Careful! ' : '') + 'I can see ' + top.join('; ') + '.');
+}
+async function readText() {
+  const c = await frame(); speak('Reading. Please hold steady.');
+  const { data } = await Tesseract.recognize(c, $('#ocrlang').value);
+  const t = data.text.replace(/\s+/g, ' ').trim();
+  speak(t || 'I could not find readable text. Hold the page steady and well lit.');
+}
+
+/* ---------- location, navigation (OpenStreetMap) ---------- */
+const where = () => new Promise((ok, no) => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => ok([p.coords.latitude, p.coords.longitude]), () => no(new Error('Please allow location access.')), { enableHighAccuracy: true, timeout: 10000 }) : no(new Error('Location is not supported.')));
+let steps = [], si = 0;
+const stepText = s => {
+  const m = s.maneuver, road = s.name || 'the path', d = Math.round(s.distance);
+  if (m.type === 'arrive') return 'You have arrived at your destination.';
+  const verb = { left: 'turn left', right: 'turn right', 'slight left': 'bear left', 'slight right': 'bear right', 'sharp left': 'turn sharp left', 'sharp right': 'turn sharp right', uturn: 'make a U turn' }[m.modifier] || 'continue straight';
+  return m.type === 'depart' ? `Start walking on ${road} for ${d} metres.` : `${verb[0].toUpperCase() + verb.slice(1)} onto ${road}, then walk ${d} metres.`;
+};
+function nextStep() { if (!steps.length) return 'No active route. Say navigate to, and a place name.'; return si < steps.length ? steps[si++] : 'You have reached the end of the route.'; }
+async function startNav(dest) {
+  if (!dest) return speak('Where do you want to go? Type or say a place.');
+  speak('Finding your route.');
+  const [lat, lon] = await where();
+  const g = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(dest)}&viewbox=${lon - .3},${lat + .3},${lon + .3},${lat - .3}`)).json();
+  if (!g.length) return speak('I could not find ' + dest + '.');
+  const r = await (await fetch(`https://router.project-osrm.org/route/v1/foot/${lon},${lat};${g[0].lon},${g[0].lat}?steps=true&overview=false`)).json();
+  if (r.code !== 'Ok') return speak('I could not find a walking route.');
+  const rt = r.routes[0]; steps = rt.legs[0].steps.map(stepText); si = 0;
+  speak(`Route found. ${(rt.distance / 1000).toFixed(1)} kilometres, about ${Math.round(rt.duration / 60)} minutes. ` + nextStep());
+}
+$('#go').onclick = () => handle('navigate to ' + $('#dest').value);
+
+/* ---------- reminders ---------- */
+function parseTime(t) {
+  const m = t.match(/(\d{1,2})(?:[:.](\d{2}))?\s*([ap])\.?m\.?|(\d{1,2}):(\d{2})/i); if (!m) return null;
+  let h, mi;
+  if (m[1]) { h = +m[1]; mi = +(m[2] || 0); const ap = m[3].toLowerCase(); if (ap === 'p' && h < 12) h += 12; if (ap === 'a' && h === 12) h = 0; } else { h = +m[4]; mi = +m[5]; }
+  return h > 23 || mi > 59 ? null : String(h).padStart(2, '0') + ':' + String(mi).padStart(2, '0');
+}
+function addReminder(label, at) {
+  const r = store('rem') || []; r.push({ label, at, last: '' }); store('rem', r); renderRem();
+  speak(`Okay. I will remind you to ${label} at ${at}.`);
+}
+function addReminderFromText(t) {
+  const at = parseTime(t); if (!at) return speak('Please say the medicine and time, for example: remind me to take tablet at 8 30 p m.');
+  const label = t.replace(/(\d{1,2})(?:[:.](\d{2}))?\s*([ap])\.?m\.?|(\d{1,2}):(\d{2})/i, '').replace(/\b(remind me|reminder|set|add|to|at|please|for)\b/gi, ' ').replace(/\s+/g, ' ').trim() || 'your medicine';
+  addReminder(label, at);
+}
+function renderRem() {
+  const r = store('rem') || [];
+  $('#rlist').innerHTML = '';
+  r.forEach((x, i) => { const li = document.createElement('li'); li.textContent = `${x.label} at ${x.at} `; const b = document.createElement('button'); b.textContent = 'Delete'; b.onclick = () => { r.splice(i, 1); store('rem', r); renderRem(); }; li.append(b); $('#rlist').append(li); });
+}
+$('#radd').onclick = () => { if ($('#rl').value && $('#rt').value) { addReminder($('#rl').value, $('#rt').value); $('#rl').value = ''; } else speak('Please enter the medicine and the time.'); };
+setInterval(() => {
+  const n = new Date(), hm = n.toTimeString().slice(0, 5), day = n.toDateString(), r = store('rem') || []; let ch = false;
+  r.forEach(x => { if (x.at === hm && x.last !== day) { x.last = day; ch = true; speak(`Reminder. It is time to ${x.label}.`); if (window.Notification && Notification.permission === 'granted') new Notification('VisioMate reminder', { body: x.label }); } });
+  if (ch) store('rem', r);
+}, 15000);
+if (window.Notification && Notification.permission === 'default') Notification.requestPermission();
+
+/* ---------- SOS ---------- */
+let sosTimer;
+$('#contacts').value = store('contacts') || '';
+$('#contacts').onchange = e => store('contacts', e.target.value);
+function sos() {
+  if (!$('#contacts').value.trim()) return speak('Please add an emergency contact number first.');
+  store('contacts', $('#contacts').value);
+  clearTimeout(sosTimer); speak('Sending emergency alert in 5 seconds. Press cancel to stop.');
+  sosTimer = setTimeout(async () => {
+    let link = 'location unavailable';
+    try { const [la, lo] = await where(); link = `https://maps.google.com/?q=${la},${lo}`; } catch (e) {}
+    const msg = `EMERGENCY! I need help. My location: ${link}`;
+    speak('Opening your message app with the alert. Please press send.');
+    location.href = `sms:${$('#contacts').value.replace(/\s/g, '').split(',')[0]}?body=${encodeURIComponent(msg)}`;
+  }, 5000);
+}
+$('#sos').onclick = sos;
+$('#cancel').onclick = () => { clearTimeout(sosTimer); speak('Emergency alert cancelled.'); };
+
+renderRem();
+log('bot', 'VisioMate is ready. Tap the big button and speak, or type a command.');
+</script>
+</body>
+</html>
