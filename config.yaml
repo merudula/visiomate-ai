@@ -1,0 +1,25 @@
+language: en-IN          # speech recognition language: en-IN, ta-IN, hi-IN ...
+speech_rate: 165
+wake_word: visiomate
+require_wake_word: false # true = ignore speech unless it contains the wake word
+camera_index: 0
+
+object_detection:
+  model: yolov8n.pt
+  confidence: 0.45
+
+currency:
+  model: models/inr_currency.pt   # train your own - see README
+  confidence: 0.6
+
+ocr:
+  lang: eng+tam          # install tesseract-ocr-tam for Tamil
+
+navigation:
+  # Optional fixed location (recommended: replace with GPS reader on a real device)
+  lat: null
+  lon: null
+
+sos:
+  contacts: ["+911234567890"]   # change this!
+  countdown_seconds: 5

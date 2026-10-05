@@ -1,0 +1,10 @@
+opencv-python>=4.9
+numpy>=1.26
+ultralytics>=8.2        # YOLOv8 object + currency detection
+pytesseract>=0.3.10     # OCR (needs Tesseract installed on the OS)
+pyttsx3>=2.90           # offline text-to-speech
+SpeechRecognition>=3.10 # speech-to-text
+PyAudio>=0.2.14         # microphone input
+requests>=2.31
+PyYAML>=6.0
+pytest>=8.0
